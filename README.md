@@ -135,7 +135,6 @@ Set-Location ..
 ##### Usage
 
 ```
-cd "C:\WINDOWS\System32"
 .\repair-git-folder-structure.ps1 -RepoUrl "https://github.com/YourUserName/YourProject.git"
 ```
 
