@@ -32,43 +32,66 @@ Then enter this code and save as admin:
 
 ```
 param (
-    [Parameter(Mandatory=$true)]
-    [string]$Path
+    [Parameter(Mandatory=$false)] 
+    [string]$Path = "."          # Default: Current directory
 )
 
-# In das Verzeichnis wechseln
-$targetDir = Get-Item $Path
-Set-Location $targetDir.FullName
+# 1. Save current location to the stack
+Push-Location
 
-# Den Namen des Ordners als Repo-Namen speichern
-$repoName = $targetDir.Name
+try {
+    # Resolve target directory and switch to it
+    $targetDir = Get-Item $Path
+    Set-Location $targetDir.FullName
+    $repoName = $targetDir.Name
 
-Write-Host "Verarbeite: $repoName" -ForegroundColor Cyan
+    Write-Host "🚀 Starting process for: $repoName" -ForegroundColor Cyan
 
-# 1. Git initialisieren, falls noch nicht geschehen
-if (-not (Test-Path ".git")) {
-    git init -b main
-    Write-Host "Git Repository initialisiert." -ForegroundColor Green
+    # 2. Git & LFS Setup
+    if (-not (Test-Path ".git")) {
+        git init -b main
+        git lfs install
+        Write-Host "✅ Git & LFS initialized." -ForegroundColor Green
+    }
+
+    # 3. LFS Tracking for large files (> 45MB)
+    Write-Host "🔍 Searching for large files..." -ForegroundColor Yellow
+    $largeFiles = Get-ChildItem -Recurse | Where-Object { $_.Length -gt 45MB -and -not $_.PSIsContainer }
+    
+    if ($largeFiles) {
+        foreach ($file in $largeFiles) {
+            # Convert absolute path to relative path for Git
+            $relativePath = Resolve-Path -Path $file.FullName -Relative
+            git lfs track $relativePath
+        }
+        git add .gitattributes
+        Write-Host "📦 Large files are now tracked via LFS." -ForegroundColor Magenta
+    }
+
+    # 4. Add files and Commit
+    git add .
+    git commit -m "Initial commit with LFS tracking"
+
+    # 5. Create GitHub Repo and push
+    # Note: If repo already exists, gh will prompt or throw an error depending on environment
+    gh repo create $repoName --source=. --public --push
+
+    Write-Host "🎉 Success! $repoName is now on GitHub." -ForegroundColor Green
 }
-
-# 2. Dateien hinzufügen und erster Commit
-git add .
-git commit -m "Initial commit"
-
-# 3. GitHub Repository erstellen (Privat standardmäßig)
-# --source=. sagt: Nutze den aktuellen Ordner
-# --push sagt: Lade den Code sofort hoch
-gh repo create $repoName --source=. --public --push
-
-Write-Host "Erfolgreich! $repoName ist jetzt auf GitHub." -ForegroundColor Green
-cd "C:\WINDOWS\System32"
+catch {
+    Write-Host "❌ An error occurred: $_" -ForegroundColor Red
+}
+finally {
+    # 6. Always return to the original starting directory
+    Pop-Location
+    Write-Host "📍 Returned to directory: $((Get-Location).Path)" -ForegroundColor Gray
+}
 ```
 
 ##### Usage
 
 ```
-cd "C:\WINDOWS\System32"
-.\push-to-github.ps1 "path\to\directory"
+push-to-github.ps1 "path\to\directory"
 ```
 
 #### Repair-Git-Folder-Structure
@@ -91,55 +114,227 @@ param (
     [string]$RepoUrl
 )
 
-# 1. Repo-Namen aus der URL extrahieren (z.B. "MeinProjekt" aus "https://github.com/user/MeinProjekt.git")
+# 1. Extract repo name from URL (e.g., "MyProject" from "https://github.com/user/MyProject.git")
 $repoName = ($RepoUrl -split "/" | Select-Object -Last 1).Replace(".git", "")
 $tempPath = Join-Path $env:TEMP "git-repair-$repoName"
 
-Write-Host "Klone $repoName nach $tempPath..." -ForegroundColor Cyan
+Write-Host "Cloning $repoName to $tempPath..." -ForegroundColor Cyan
 
-# Falls der Temp-Ordner noch von einem alten Versuch existiert, löschen
-if (Test-Path $tempPath) { Remove-Item $tempPath -Recurse -Force }
+# Delete temp folder if it exists from a previous failed run
+if (Test-Path $tempPath) { 
+    Remove-Item $tempPath -Recurse -Force 
+}
 
-# 2. Repository klonen
+# 2. Clone the repository
 git clone $RepoUrl $tempPath
+$originalLocation = Get-Location
 Set-Location $tempPath
 
-# 3. Prüfen, ob der "Ordner-im-Ordner" Fehler vorliegt
+# 3. Check for the "folder-inside-folder" error
 if (Test-Path ".\$repoName") {
-    Write-Host "Strukturfehler gefunden. Korrigiere..." -ForegroundColor Yellow
+    Write-Host "Structural error detected. Correcting..." -ForegroundColor Yellow
 
-    # Alles aus dem Unterordner eine Ebene hoch (inkl. versteckter Dateien)
-    # Wir nutzen eine temporäre Liste, um Konflikte beim Verschieben zu vermeiden
+    # Move all items from the subfolder one level up
+    # Using a loop to handle potential conflicts and hidden files
     Get-ChildItem -Path ".\$repoName\*" | ForEach-Object {
         Move-Item -Path $_.FullName -Destination "." -Force
     }
 
-    # Den leeren Unterordner löschen
+    # Remove the now empty subfolder
     Remove-Item ".\$repoName" -Force
 
-    # 4. Änderungen in Git registrieren und hochladen
+    # 4. Register changes in Git and upload
     git add .
     git commit -m "Fix: Removed redundant subfolder and flattened structure"
-    git push origin main # Oder 'master', falls dein Default-Branch so heißt
+    
+    # Detect default branch name (main vs master)
+    $branch = git symbolic-ref --short HEAD
+    Write-Host "Pushing changes to $branch..." -ForegroundColor Cyan
+    git push origin $branch
 
-    Write-Host "Reparatur abgeschlossen und auf GitHub gepusht!" -ForegroundColor Green
+    Write-Host "Repair complete and pushed to GitHub!" -ForegroundColor Green
 } else {
-    Write-Host "Keine doppelte Ordnerstruktur '$repoName/$repoName' gefunden." -ForegroundColor Red
+    Write-Host "No redundant folder structure '$repoName/$repoName' found." -ForegroundColor Red
 }
 
-# Zurück zum Ursprung und Temp aufräumen
-Set-Location ..
+# Return to original location and clean up temp files
+Set-Location $originalLocation
 # Optional: Remove-Item $tempPath -Recurse -Force
+Write-Host "📍 Back in: $((Get-Location).Path)" -ForegroundColor Gray
 ```
 
 ##### Usage
 
 ```
-.\repair-git-folder-structure.ps1 -RepoUrl "https://github.com/YourUserName/YourProject.git"
+repair-git-folder-structure.ps1 -RepoUrl "https://github.com/YourUserName/YourProject.git"
 ```
 
 ## Linux
 
-### Bash
+### Bash / Shell
+
+#### Push-to-Github
+
+Problem: You have many folders that you want to push to GitHub, but you want to save yourself the time of creating the external repository each time.
+Solution: If the directory to be pushed already has the name of your repository, you can use this simple script.
+
+##### Pre-Installation
+
+1. At first you have to install `Git`. (I assume that most people already have Git pre-installed before they encounter their “problem.”)
+2. Then you have to install `GitHub CLI (gh)`
+3. Then you have to log in once with `gh`.
+
+```
+sudo apt update && sudo apt install gh git git-lfs -y
+gh auth login
+```
+
+##### Installation
+
+```
+nano /usr/local/bin/push-to-github.bash
+```
+
+Then enter this code and save it:
+
+```
+#!/bin/bash
+
+# Target directory from argument or current directory
+TARGET_DIR="${1:-.}"
+# Save the starting directory (like Push-Location)
+START_DIR=$(pwd)
+
+# Resolve absolute path
+cd "$TARGET_DIR" || exit
+REPO_NAME=$(basename "$(pwd)")
+
+echo -e "\e[36m🚀 Starting process for: $REPO_NAME\e[0m"
+
+# 1. Git & LFS Setup
+if [ ! -d ".git" ]; then
+    git init -b main
+    git lfs install
+    echo -e "\e[32m✅ Git & LFS initialized.\e[0m"
+fi
+
+# 2. LFS Tracking for files > 45MB
+echo -e "\e[33m🔍 Searching for large files...\e[0m"
+# Find files larger than 45MB and track them
+find . -type f -size +45M -not -path '*/.*' | while read -r file; do
+    git lfs track "$file"
+done
+
+if [ -f ".gitattributes" ]; then
+    git add .gitattributes
+    echo -e "\e[35m📦 Large files are now tracked via LFS.\e[0m"
+fi
+
+# 3. Add files and Commit
+git add .
+git commit -m "Initial commit with LFS tracking"
+
+# 4. Create GitHub Repo and push
+gh repo create "$REPO_NAME" --source=. --public --push
+
+echo -e "\e[32m🎉 Success! $REPO_NAME is now on GitHub.\e[0m"
+
+# 5. Return to original directory (like Pop-Location)
+cd "$START_DIR"
+echo -e "\e[90m📍 Returned to directory: $(pwd)\e[0m"
+```
+
+At least you have to make it executable:
+
+```
+chmod +x /usr/local/bin/push-to-github.bash
+```
+
+##### Usage
+
+```
+push-to-github.bash "path\to\directory"
+```
+
+#### Repair-Git-Folder-Structure
+
+Problem: Sometimes it happens that you push a subfolder instead of the contents of that folder. This creates an incorrect folder hierarchy in the Git repository.
+Solution: The solution is to clone the repository, move all files up one level, delete the subfolder, commit all changes, and push again.
+
+##### Installation
+
+```
+nano /usr/local/bin/repair-git-folder-structure.bash
+```
+
+Then enter this code and save it:
+
+```
+#!/bin/bash
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <GitHub-Repo-URL>"
+    exit 1
+fi
+
+REPO_URL="$1"
+# Extract repo name from URL
+REPO_NAME=$(basename "$REPO_URL" .git)
+TEMP_PATH="/tmp/git-repair-$REPO_NAME"
+START_DIR=$(pwd)
+
+echo -e "\e[36mCloning $REPO_NAME to $TEMP_PATH...\e[0m"
+
+# Clean up old temp runs
+rm -rf "$TEMP_PATH"
+
+# 1. Clone the repo
+git clone "$REPO_URL" "$TEMP_PATH"
+cd "$TEMP_PATH" || exit
+
+# 2. Check for the "folder-inside-folder" error
+if [ -d "$REPO_NAME" ]; then
+    echo -e "\e[33mStructural error detected. Correcting...\e[0m"
+
+    # Move all items (including hidden ones, excluding . and ..) up
+    find "$REPO_NAME" -mindepth 1 -maxdepth 1 -exec mv -t . {} +
+
+    # Remove the now empty subfolder
+    rmdir "$REPO_NAME"
+
+    # 3. Register changes and push
+    git add .
+    git commit -m "Fix: Removed redundant subfolder and flattened structure"
+    
+    # Detect default branch (main or master)
+    BRANCH=$(git symbolic-ref --short HEAD)
+    echo -e "\e[36mPushing changes to $BRANCH...\e[0m"
+    git push origin "$BRANCH"
+
+    echo -e "\e[32mRepair complete and pushed to GitHub!\e[0m"
+else
+    echo -e "\e[31mNo redundant folder structure '$REPO_NAME/$REPO_NAME' found.\e[0m"
+fi
+
+# 4. Clean up and return
+cd "$START_DIR"
+echo -e "\e[90m📍 Back in: $(pwd)\e[0m"
+```
+
+At least you have to make it executable:
+
+```
+chmod +x /usr/local/bin/repair-git-folder-structure.bash
+```
+
+##### Usage
+
+```
+repair-git-folder-structure.bash -RepoUrl "https://github.com/YourUserName/YourProject.git"
+```
+
+
+
+
 
 ### Shell
