@@ -71,6 +71,74 @@ cd "C:\WINDOWS\System32"
 .\push-to-github.ps1 "path\to\directory"
 ```
 
+#### Repair-Git-Folder-Structure
+
+Problem: Sometimes it happens that you push a subfolder instead of the contents of that folder. This creates an incorrect folder hierarchy in the Git repository.
+Solution: The solution is to clone the repository, move all files up one level, delete the subfolder, commit all changes, and push again.
+
+##### Installation
+
+```
+cd "C:\WINDOWS\System32"
+code repair-git-folder-structure.ps1
+```
+
+Then enter this code and save as admin:
+
+```
+param (
+    [Parameter(Mandatory=$true)]
+    [string]$RepoUrl
+)
+
+# 1. Repo-Namen aus der URL extrahieren (z.B. "MeinProjekt" aus "https://github.com/user/MeinProjekt.git")
+$repoName = ($RepoUrl -split "/" | Select-Object -Last 1).Replace(".git", "")
+$tempPath = Join-Path $env:TEMP "git-repair-$repoName"
+
+Write-Host "Klone $repoName nach $tempPath..." -ForegroundColor Cyan
+
+# Falls der Temp-Ordner noch von einem alten Versuch existiert, löschen
+if (Test-Path $tempPath) { Remove-Item $tempPath -Recurse -Force }
+
+# 2. Repository klonen
+git clone $RepoUrl $tempPath
+Set-Location $tempPath
+
+# 3. Prüfen, ob der "Ordner-im-Ordner" Fehler vorliegt
+if (Test-Path ".\$repoName") {
+    Write-Host "Strukturfehler gefunden. Korrigiere..." -ForegroundColor Yellow
+
+    # Alles aus dem Unterordner eine Ebene hoch (inkl. versteckter Dateien)
+    # Wir nutzen eine temporäre Liste, um Konflikte beim Verschieben zu vermeiden
+    Get-ChildItem -Path ".\$repoName\*" | ForEach-Object {
+        Move-Item -Path $_.FullName -Destination "." -Force
+    }
+
+    # Den leeren Unterordner löschen
+    Remove-Item ".\$repoName" -Force
+
+    # 4. Änderungen in Git registrieren und hochladen
+    git add .
+    git commit -m "Fix: Removed redundant subfolder and flattened structure"
+    git push origin main # Oder 'master', falls dein Default-Branch so heißt
+
+    Write-Host "Reparatur abgeschlossen und auf GitHub gepusht!" -ForegroundColor Green
+} else {
+    Write-Host "Keine doppelte Ordnerstruktur '$repoName/$repoName' gefunden." -ForegroundColor Red
+}
+
+# Zurück zum Ursprung und Temp aufräumen
+Set-Location ..
+# Optional: Remove-Item $tempPath -Recurse -Force
+```
+
+##### Usage
+
+```
+cd "C:\WINDOWS\System32"
+.\repair-git-folder-structure.ps1 -RepoUrl "https://github.com/YourUserName/YourProject.git"
+```
+
 ## Linux
 
 ### Bash
