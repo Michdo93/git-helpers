@@ -169,6 +169,88 @@ Write-Host "📍 Back in: $((Get-Location).Path)" -ForegroundColor Gray
 repair-git-folder-structure.ps1 -RepoUrl "https://github.com/YourUserName/YourProject.git"
 ```
 
+#### Migrate-to-Github
+
+Problem: Sometimes you have the problem that you would like to fork, but for example, a fork from Bitbucket to GitHub is not possible.
+Solution: The solution is called mirroring. You essentially clone the repository and then upload it to GitHub.
+
+##### Pre-Installation
+
+1. At first you have to install `Git`. (I assume that most people already have Git pre-installed before they encounter their “problem.”)
+2. Then you have to install `GitHub CLI (gh)`
+3. Then you have to log in once with `gh`.
+
+```
+winget install --id GitHub.cli
+gh auth login
+```
+
+##### Installation
+
+```
+cd "C:\WINDOWS\System32"
+code migrate-to-github.ps1
+```
+
+Then enter this code and save as admin:
+
+```
+param (
+    [Parameter(Mandatory=$true)]
+    [string]$SourceUrl,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$GhUser = "MyGhUser"
+)
+
+# 1. Save current location
+Push-Location
+
+try {
+    # Extract Repo Name
+    $repoName = ($SourceUrl -split "/" | Select-Object -Last 1).Replace(".git", "")
+    $tempFolder = "$repoName.git"
+
+    Write-Host "🚀 Starting migration for: $repoName" -ForegroundColor Cyan
+
+    # 2. Mirror clone the repository (includes all branches, tags, and refs)
+    Write-Host "📥 Mirroring from source..." -ForegroundColor Yellow
+    git clone --mirror $SourceUrl $tempFolder
+    
+    if (-not (Test-Path $tempFolder)) {
+        throw "Failed to clone source repository."
+    }
+
+    Set-Location $tempFolder
+
+    # 3. Create the repository on GitHub
+    Write-Host "📤 Creating and pushing to GitHub..." -ForegroundColor Yellow
+    # Note: --source=. uses the current mirrored metadata to populate the new repo
+    gh repo create "$GhUser/$repoName" --public --source=. --push
+
+    Write-Host "✅ Success! Repository is now at: https://github.com/$GhUser/$repoName" -ForegroundColor Green
+}
+catch {
+    Write-Host "❌ An error occurred: $_" -ForegroundColor Red
+}
+finally {
+    # 4. Cleanup and return
+    Set-Location ..
+    if (Test-Path $tempFolder) {
+        Remove-Item $tempFolder -Recurse -Force
+        Write-Host "🧹 Temporary mirror folder removed." -ForegroundColor Gray
+    }
+    Pop-Location
+    Write-Host "📍 Returned to: $((Get-Location).Path)" -ForegroundColor Gray
+}
+```
+
+##### Usage
+
+```
+migrate-to-github.ps1 -SourceUrl "https://bitbucket.org/user/repo.git" -GhUser "MyGhUser"
+```
+
 ## Linux
 
 ### Bash / Shell
@@ -333,8 +415,89 @@ chmod +x /usr/local/bin/repair-git-folder-structure.bash
 repair-git-folder-structure.bash -RepoUrl "https://github.com/YourUserName/YourProject.git"
 ```
 
+#### Migrate-to-Github
+
+Problem: Sometimes you have the problem that you would like to fork, but for example, a fork from Bitbucket to GitHub is not possible.
+Solution: The solution is called mirroring. You essentially clone the repository and then upload it to GitHub.
+
+##### Pre-Installation
+
+1. At first you have to install `Git`. (I assume that most people already have Git pre-installed before they encounter their “problem.”)
+2. Then you have to install `GitHub CLI (gh)`
+3. Then you have to log in once with `gh`.
+
+```
+sudo apt update && sudo apt install gh git git-lfs -y
+gh auth login
+```
+
+##### Installation
+
+```
+nano /usr/local/bin/migrate-to-github.bash
+```
+
+Then enter this code and save as admin:
+
+```
+#!/bin/bash
+
+# Default GitHub User
+GH_USER=${GH_USER:-"MyGhUser"}
+
+# 1. Check for argument
+if [ -z "$1" ]; then
+    echo -e "\e[31mUsage: $0 <source-git-url>\e[0m"
+    exit 1
+fi
+
+SOURCE_URL=$1
+REPO_NAME=$(basename "$SOURCE_URL" .git)
+TEMP_FOLDER="$REPO_NAME.git"
+START_DIR=$(pwd)
+
+echo -e "\e[36m🚀 Starting migration for: $REPO_NAME\e[0m"
+
+# 2. Mirror clone (Local temporary folder)
+echo -e "\e[33m📥 Mirroring from source...\e[0m"
+git clone --mirror "$SOURCE_URL" "$TEMP_FOLDER"
+
+if [ ! -d "$TEMP_FOLDER" ]; then
+    echo -e "\e[31m❌ Error: Failed to clone repository.\e[0m"
+    exit 1
+fi
+
+cd "$TEMP_FOLDER" || exit
+
+# 3. Create and Push to GitHub
+echo -e "\e[33m📤 Creating and pushing to GitHub...\e[0m"
+gh repo create "$GH_USER/$REPO_NAME" --public --source=. --push
+
+echo -e "\e[32m✅ Success! Repository is now at: https://github.com/$GH_USER/$REPO_NAME\e[0m"
+
+# 4. Cleanup and return
+cd "$START_DIR"
+if [ -d "$TEMP_FOLDER" ]; then
+    rm -rf "$TEMP_FOLDER"
+    echo -e "\e[90m🧹 Temporary mirror folder removed.\e[0m"
+fi
+
+echo -e "\e[90m📍 Returned to directory: $(pwd)\e[0m"
+```
+
+At least you have to make it executable:
+
+```
+chmod +x /usr/local/bin/migrate-to-github.bash
+```
+
+##### Usage
+
+```
+migrate-to-github.bash -SourceUrl "https://bitbucket.org/user/repo.git" -GhUser "MyGhUser"
+```
 
 
 
 
-### Shell
+
